@@ -77,14 +77,16 @@ type Kinetic = (Position, Velocity)
 
 -- type Kinetic = (Position, Velocity)
 -- , ymin, ymax :: Double
-areaWidth, areaHeight, boidSpeed, cohesionFactor, separationFactor, alignmentFactor :: Float
+areaWidth, areaHeight, boidSpeed, separationDist :: Float
 areaWidth = 400
 areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
 -- xmin = -xmax
 boidSpeed = 50
 sightRadius = 100
+separationDist = 30
 
+cohesionFactor, separationFactor, alignmentFactor :: Float
 cohesionFactor = 0.02
 separationFactor = 0.1
 alignmentFactor = 0.1
@@ -150,20 +152,26 @@ step dT = do
 gameLogic :: System' ()
 gameLogic = do
   cohesion
+  separation
 
 cohesion :: System' ()
-cohesion
-  = cmapM $ \(Boid, Position p, Velocity v) -> do
-      localPs <- collect $ \(Boid, Position p') -> toMaybe (withinRange p p') p'
-      -- let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
-      let centreMass = (sumV localPs - p) ^/ (fromIntegral $ length localPs - 1)
-          dv = cohesionFactor *^ (centreMass - p)
+cohesion = cmapM $ \(Boid, Position p, Velocity v) -> do
+  localPs <- collect $ \(Boid, Position p') -> toMaybe (withinRange sightRadius p p') p'
+  -- let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
+  let centreMass = (sumV localPs - p) ^/ (fromIntegral $ length localPs - 1)
+      dv = cohesionFactor *^ (centreMass - p)
 
-      pure $ Velocity (v + dv)
+  pure $ Velocity (v + dv)
 
+separation :: System' ()
+separation = cmapM $ \(Boid, Position p, Velocity v) -> do
+  localDists <- collect $ \(Boid, Position p')
+                            -> toMaybe (withinRange separationDist p p')
+                                       (p' - p)
+  pure $ Velocity (v - separationFactor *^ sumV localDists)
 
-withinRange :: V2 Float -> V2 Float -> Bool
-withinRange p1 p2 = distance p1 p2 <= sightRadius
+withinRange :: Float -> V2 Float -> V2 Float -> Bool
+withinRange radius p1 p2 = distance p1 p2 <= radius
 
 
 
