@@ -9,7 +9,7 @@ import Apecs
 import Apecs.Physics.Gloss
 import Apecs.Gloss
 
-import Linear ( V2(..), angle, (*^), distance, sumV, (^/), unangle )
+import Linear ( V2(..), angle, (*^), distance, sumV, (^/), unangle, signorm, norm )
 
 import System.Random
 import System.Exit
@@ -21,6 +21,7 @@ import Witch
 import Flow
 import Data.String.Interpolate (i, __i)
 import Data.Fixed (mod')
+import Apecs.System (cmapIf)
 
 data Boid = Boid deriving Show
 instance Component Boid where type Storage Boid = Map Boid
@@ -77,12 +78,12 @@ type Kinetic = (Position, Velocity)
 
 -- type Kinetic = (Position, Velocity)
 -- , ymin, ymax :: Double
-areaWidth, areaHeight, boidSpeed, separationDist :: Float
+areaWidth, areaHeight, maxSpeed, separationDist :: Float
 areaWidth = 400
 areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
 -- xmin = -xmax
-boidSpeed = 50
+maxSpeed = 100
 sightRadius = 100
 separationDist = 30
 
@@ -153,15 +154,22 @@ gameLogic :: System' ()
 gameLogic = do
   cohesion
   separation
+  alignment -- boids are zooming off. need a speed limit
+  speedLimit
 
 cohesion :: System' ()
 cohesion = cmapM $ \(Boid, Position p, Velocity v) -> do
   localPs <- collect $ \(Boid, Position p') -> toMaybe (withinRange sightRadius p p') p'
   -- let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
-  let centreMass = (sumV localPs - p) ^/ (fromIntegral $ length localPs - 1)
-      dv = cohesionFactor *^ (centreMass - p)
-
-  pure $ Velocity (v + dv)
+  let v' = case localPs of
+            []  -> v
+            [_] -> v -- Only local boid is the one we want to update
+            _   -> 
+              let centreMass = (sumV localPs - p)
+                            ^/ (fromIntegral $ length localPs - 1)
+                  dv = cohesionFactor *^ (centreMass - p)
+              in  v + dv
+  pure $ Velocity v'
 
 separation :: System' ()
 separation = cmapM $ \(Boid, Position p, Velocity v) -> do
@@ -170,10 +178,27 @@ separation = cmapM $ \(Boid, Position p, Velocity v) -> do
                                        (p' - p)
   pure $ Velocity (v - separationFactor *^ sumV localDists)
 
+alignment :: System' ()
+alignment = cmapM $ \(Boid, Position p, Velocity v) -> do
+  localVs <- collect $ \(Boid, Position p', Velocity v')
+                        -> toMaybe (withinRange separationDist p p') v'
+
+  let v' = case localVs of
+            []  -> v
+            [_] -> v -- Only local boid is the one we want to update
+            _   -> 
+              let meanV = (sumV localVs - v) ^/ (fromIntegral $ length localVs - 1)
+                  dv = alignmentFactor *^ meanV
+              in  v + dv
+  pure $ Velocity v'
+
 withinRange :: Float -> V2 Float -> V2 Float -> Bool
 withinRange radius p1 p2 = distance p1 p2 <= radius
 
-
+speedLimit :: System' ()
+speedLimit
+  = cmapIf (\(Velocity v) -> norm v > maxSpeed)
+           (\(Boid, Velocity v) -> Velocity (maxSpeed *^ signorm v))
 
 toMaybe :: Bool -> a -> Maybe a
 toMaybe q x = if q then Just x else Nothing
