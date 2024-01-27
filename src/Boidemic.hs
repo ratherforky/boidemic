@@ -150,6 +150,8 @@ step dT = do
 -- Game Logic
 -------------------------------------------
 
+-- This page is a particularly useful point of reference: http://www.kfish.org/boids/pseudocode.html
+
 gameLogic :: System' ()
 gameLogic = do
   cohesion
