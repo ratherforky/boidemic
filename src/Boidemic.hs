@@ -9,7 +9,7 @@ import Apecs
 import Apecs.Physics.Gloss
 import Apecs.Gloss
 
-import Linear ( V2(..), angle, (*^) )
+import Linear ( V2(..), angle, (*^), distance, sumV, (^/), unangle )
 
 import System.Random
 import System.Exit
@@ -36,14 +36,14 @@ instance Component BoidSprite where type Storage BoidSprite = Global BoidSprite
 newtype Position = Position (V2 Float) deriving Show
 instance Component Position where type Storage Position = Map Position
 
--- newtype Velocity = Velocity (V2 Float) deriving Show
--- instance Component Velocity where type Storage Velocity = Map Velocity
+newtype Velocity = Velocity (V2 Float) deriving Show
+instance Component Velocity where type Storage Velocity = Map Velocity
 
-newtype Angle = Angle Float deriving Show -- Angle in radians
-instance Component Angle where type Storage Angle = Map Angle
+-- newtype Angle = Angle Float deriving Show -- Angle in radians
+-- instance Component Angle where type Storage Angle = Map Angle
 
-newtype Speed = Speed Float deriving Show
-instance Component Speed where type Storage Speed = Map Speed
+-- newtype Speed = Speed Float deriving Show
+-- instance Component Speed where type Storage Speed = Map Speed
 
 
 -- data Player = Player deriving Show
@@ -69,10 +69,10 @@ instance Component Speed where type Storage Speed = Map Speed
 -- instance Semigroup RightDown where RightDown p <> RightDown q = RightDown (p && q)
 -- instance Monoid RightDown where mempty = RightDown False
 
-makeWorld "World" [''Camera, ''Boid, ''BoidSprite, ''Position, ''Angle, ''Speed]
+makeWorld "World" [''Camera, ''Boid, ''BoidSprite, ''Position, ''Velocity]
 
 type System' a = System World a
-type Kinetic = (Position, Angle, Speed)
+type Kinetic = (Position, Velocity)
 
 
 -- type Kinetic = (Position, Velocity)
@@ -83,10 +83,11 @@ areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
 -- xmin = -xmax
 boidSpeed = 50
+sightRadius = 100
 
-newBoid :: V2 Float -> Float -> System' ()
-newBoid pos a
-  = newEntity_ (Boid, Position pos, Angle a, Speed boidSpeed)
+newBoid :: V2 Float -> V2 Float -> System' ()
+newBoid pos v
+  = newEntity_ (Boid, Position pos, Velocity v)
 
 
 
@@ -106,8 +107,7 @@ clamp minVal maxVal x = min maxVal (max minVal x)
 
 stepPosition :: Float -> System' ()
 stepPosition dT
-  = cmap $ \(Speed s, Angle a, Position p)
-            -> Position (p + dT *^ (s *^ angle a))
+  = cmap $ \(Velocity v, Position p) -> Position (p + dT *^ v)
 
 -- spawnParticles :: Int -> V2 Float -> (Float, Float) -> (Float, Float) -> System' ()
 -- spawnParticles n pos dvx dvy = replicateM_ n $ do
@@ -144,12 +144,22 @@ step dT = do
 
 gameLogic :: System' ()
 gameLogic = do
-  modAngle
+  cohesion
 
-modAngle, cohesion :: System' ()
-modAngle = cmap $ \(Angle a) -> Angle (a `mod'` (2 * pi))
+cohesion :: System' ()
+cohesion
+  = cmapM $ \(Boid, Position p, Velocity v) -> do
+      localPs <- collect $ \(Boid, Position p') -> toMaybe (withinRange p p') p'
+      let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
+      pure ()
 
-cohesion = pure ()
+withinRange :: V2 Float -> V2 Float -> Bool
+withinRange p1 p2 = distance p1 p2 <= sightRadius
+
+
+
+toMaybe :: Bool -> a -> Maybe a
+toMaybe q x = if q then Just x else Nothing
 
 -------------------------------------------
 -- Rest
@@ -188,19 +198,18 @@ radToDegreeFactor = 180 / pi
 
 draw :: System' Picture
 draw = do
-  foldDrawM $ \(Boid, Position pos, Angle a) -> do
+  foldDrawM $ \(Boid, Position pos, Velocity v) -> do
                  BoidSprite sprite <- get global
-                 pure (translate' pos $ rotate' a sprite)
+                 pure (translate' pos $ rotate' (unangle v) sprite)
 
 display :: Display
 display = InWindow "Boidemic" (640, 640) (10, 10)
 
 randomSpawnBoids :: Int -> System' ()
 randomSpawnBoids n = replicateM_ n $ do
-  x <- liftIO $ randomRIO (-50, 50)
-  y <- liftIO $ randomRIO (-50, 50)
-  a <- liftIO $ randomRIO (0, 2 * pi)
-  newBoid (V2 x y) a
+  pos <- liftIO $ randomRIO (-50, 50)
+  v   <- liftIO $ randomRIO (-30, 30)
+  newBoid pos v
 
 initialise :: System' ()
 initialise = do
