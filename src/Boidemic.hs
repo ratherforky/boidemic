@@ -77,13 +77,17 @@ type Kinetic = (Position, Velocity)
 
 -- type Kinetic = (Position, Velocity)
 -- , ymin, ymax :: Double
-areaWidth, areaHeight, boidSpeed :: Float
+areaWidth, areaHeight, boidSpeed, cohesionFactor, separationFactor, alignmentFactor :: Float
 areaWidth = 400
 areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
 -- xmin = -xmax
 boidSpeed = 50
 sightRadius = 100
+
+cohesionFactor = 0.02
+separationFactor = 0.1
+alignmentFactor = 0.1
 
 newBoid :: V2 Float -> V2 Float -> System' ()
 newBoid pos v
@@ -125,6 +129,7 @@ stepPosition dT
 
 step :: Float -> System' ()
 step dT = do
+  gameLogic
   -- incrTime dT
   stepPosition dT
   -- setPlayerVelocity
@@ -150,8 +155,12 @@ cohesion :: System' ()
 cohesion
   = cmapM $ \(Boid, Position p, Velocity v) -> do
       localPs <- collect $ \(Boid, Position p') -> toMaybe (withinRange p p') p'
-      let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
-      pure ()
+      -- let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
+      let centreMass = (sumV localPs - p) ^/ (fromIntegral $ length localPs - 1)
+          dv = cohesionFactor *^ (centreMass - p)
+
+      pure $ Velocity (v + dv)
+
 
 withinRange :: V2 Float -> V2 Float -> Bool
 withinRange p1 p2 = distance p1 p2 <= sightRadius
@@ -214,9 +223,6 @@ randomSpawnBoids n = replicateM_ n $ do
 initialise :: System' ()
 initialise = do
   set global ( Camera 0 1 )
-
-  gameLogic
-
   randomSpawnBoids 5
 
 
@@ -224,6 +230,7 @@ boidemicMain :: IO ()
 boidemicMain = do
   w <- initWorld
   boidSprite <- loadBMP "src/boid.bmp"
+  setStdGen (mkStdGen 0)
   runWith w $ do
     set global (BoidSprite boidSprite)
     initialise
