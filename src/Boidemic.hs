@@ -61,10 +61,8 @@ instance Component Angle where type Storage Angle = Map Angle
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
 
-
--- newtype Speed = Speed Float deriving Show
--- instance Component Speed where type Storage Speed = Map Speed
-
+data Obstacle = Obstacle deriving Show
+instance Component Obstacle where type Storage Obstacle = Map Obstacle
 
 
 -- newtype Score = Score Int deriving (Show, Num)
@@ -93,7 +91,13 @@ instance Semigroup KeySet where
 instance Monoid KeySet where mempty = KeySet S.empty
 instance Component KeySet where type Storage KeySet = Global KeySet
 
-makeWorld "World" [''Camera, ''Player, ''Boid, ''BoidSprite, ''PlayerSprite, ''Position, ''Velocity, ''MaxSpeed, ''Angle, ''KeySet]
+makeWorld "World"
+  [ ''Camera
+  , ''Player, ''Boid, ''Obstacle
+  , ''BoidSprite, ''PlayerSprite
+  , ''Position, ''Velocity, ''MaxSpeed, ''Angle
+  , ''KeySet
+  ]
 
 type System' a = System World a
 type Kinetic = (Position, Velocity, MaxSpeed, Angle)
@@ -138,7 +142,7 @@ handleEvent _ = return ()
 
 -- type Kinetic = (Position, Velocity)
 -- , ymin, ymax :: Double
-areaWidth, areaHeight, boidMaxSpeed, playerMaxSpeed, separationDist :: Float
+areaWidth, areaHeight, boidMaxSpeed, playerMaxSpeed, separationDist, sightRadius, followRadius :: Float
 areaWidth = 400
 areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
@@ -146,12 +150,14 @@ areaHeight = 400
 boidMaxSpeed = 100
 playerMaxSpeed = 100
 sightRadius = 100
-separationDist = 30
+followRadius = 300
+separationDist = 20
 
-cohesionFactor, separationFactor, alignmentFactor :: Float
-cohesionFactor = 0.02
-separationFactor = 0.1
+cohesionFactor, separationFactor, alignmentFactor, followFactor :: Float
+cohesionFactor = 0.01
+separationFactor = 0.8
 alignmentFactor = 0.1
+followFactor = 0.01
 
 
 -------------------------------------------
@@ -160,11 +166,11 @@ alignmentFactor = 0.1
 
 newBoid :: V2 Float -> V2 Float -> System' ()
 newBoid pos v
-  = newEntity_ (Boid, Position pos, Velocity v, Angle 0, MaxSpeed boidMaxSpeed)
+  = newEntity_ (Boid, Obstacle, Position pos, Velocity v, Angle 0, MaxSpeed boidMaxSpeed)
 
 initPlayer :: V2 Float -> System' ()
 initPlayer pos
-  = newEntity_ (Player, Position pos, Velocity 0, Angle 0, MaxSpeed playerMaxSpeed)
+  = newEntity_ (Player, Obstacle, Position pos, Velocity 0, Angle 0, MaxSpeed playerMaxSpeed)
 
 -------------------------------------------
 -- Game Logic
@@ -196,7 +202,8 @@ gameLogic :: System' ()
 gameLogic = do
   cohesion
   separation
-  alignment -- boids are zooming off. need a speed limit
+  alignment -- boids zoom off without a speed limit
+  followPlayer
   playerVelocity
   speedLimit
   syncAngle
@@ -217,7 +224,7 @@ cohesion = cmapM $ \(Boid, Position p, Velocity v) -> do
 
 separation :: System' ()
 separation = cmapM $ \(Boid, Position p, Velocity v) -> do
-  localDists <- collect $ \(Boid, Position p')
+  localDists <- collect $ \(Obstacle, Position p')
                             -> toMaybe (withinRange separationDist p p')
                                        (p' - p)
   pure $ Velocity (v - separationFactor *^ sumV localDists)
@@ -268,6 +275,14 @@ actionToVelocity = \case
   DownA  -> V2  0 -1
   RightA -> V2  1  0
 
+followPlayer :: System' ()
+followPlayer
+  = cmapM_ $ \(Player, Position t) ->
+      cmapIf 
+        (\(Position p) -> withinRange followRadius t p) -- Only follow player if in sight
+        (\(Boid, Position p, Velocity v) ->
+            let dv = followFactor *^ (t - p)
+            in Velocity (v + dv))
 
 
 -------------------------------------------
