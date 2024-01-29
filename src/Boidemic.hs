@@ -9,6 +9,8 @@ module Boidemic (boidemicMain) where
 import Apecs
 import Apecs.Physics.Gloss
 import Apecs.Gloss
+import Graphics.Gloss.Juicy
+
 
 import Linear ( V2(..), angle, (*^), distance, sumV, (^/), unangle, signorm, norm )
 
@@ -147,16 +149,16 @@ areaWidth = 400
 areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
 -- xmin = -xmax
-boidMaxSpeed = 100
-playerMaxSpeed = 100
-sightRadius = 100
+boidMaxSpeed = 150
+playerMaxSpeed = 200
+sightRadius = 50
 followRadius = 300
 separationDist = 20
 
 cohesionFactor, separationFactor, alignmentFactor, followFactor :: Float
 cohesionFactor = 0.01
-separationFactor = 0.8
-alignmentFactor = 0.1
+separationFactor = 0.5
+alignmentFactor = 0.05
 followFactor = 0.01
 
 
@@ -183,6 +185,7 @@ step dT = do
   gameLogic
   -- incrTime dT
   stepPosition dT
+  cameraOnPlayer
   -- setPlayerVelocity
   -- clampPlayer
   -- stepParticles dT
@@ -275,6 +278,12 @@ actionToVelocity = \case
   DownA  -> V2  0 -1
   RightA -> V2  1  0
 
+cameraOnPlayer :: System' ()
+cameraOnPlayer
+  -- = cmapM_ $ \(Player, Position p) ->
+  --               modify global (\(Camera _ scale) -> Camera p scale)
+  = cmap $ \(Player, Position p, Camera _ scale) -> Camera p scale
+
 followPlayer :: System' ()
 followPlayer
   = cmapM_ $ \(Player, Position t) ->
@@ -298,8 +307,8 @@ rotate' rads = rotate (rads * -radToDegreeFactor)
 radToDegreeFactor :: Float
 radToDegreeFactor = 180 / pi
 
-draw :: System' Picture
-draw = do
+draw :: Picture -> System' Picture
+draw background = do
   BoidSprite boidSprite <- get global
   PlayerSprite playerSprite <- get global
   boids <- foldDraw $ \(Boid, Position pos, Angle a) ->
@@ -307,10 +316,10 @@ draw = do
   player <- foldDraw $ \(Player, Position pos, Angle a) ->
                 translate' pos $ rotate' a playerSprite
   
-  pure $ boids <> player
+  pure $ background <> boids <> player
 
 display :: Display
-display = InWindow "Boidemic" (640, 640) (10, 10)
+display = InWindow "Boidemic" (1024, 1024) (10, 10)
 
 randomSpawnBoids :: Int -> System' ()
 randomSpawnBoids n = replicateM_ n $ do
@@ -321,24 +330,25 @@ randomSpawnBoids n = replicateM_ n $ do
 initialise :: System' ()
 initialise = do
   set global ( Camera 0 1 )
-  randomSpawnBoids 5
+  randomSpawnBoids 20
   initPlayer (V2 0 0)
 
 
 boidemicMain :: IO ()
 boidemicMain = do
   w <- initWorld
-  boidSprite <- loadBMP "src/boid.bmp"
-  playerSprite <- loadBMP "src/player.bmp"
+  Just boidSprite   <- loadJuicyPNG "src/seagull.png"
+  Just playerSprite <- loadJuicyPNG "src/crow.png"
+  Just background   <- loadJuicyPNG "src/beach-background.png"
   setStdGen (mkStdGen 0)
   runWith w $ do
-    set global (BoidSprite boidSprite)
-    set global (PlayerSprite playerSprite)
+    set global (BoidSprite $ rotate 90 $ scale 0.2 0.2 boidSprite) -- correct sprite angle
+    set global (PlayerSprite $ rotate 90 $ scale 0.2 0.2 playerSprite)
     initialise
     play display
-         black
+         green
          60
-         draw
+         (draw $ scale 2 2 background)
          handleEvent
          step
 
