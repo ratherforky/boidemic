@@ -50,6 +50,12 @@ instance Component Player where type Storage Player = Unique Player
 data Obstacle = Obstacle deriving Show
 instance Component Obstacle where type Storage Obstacle = Map Obstacle
 
+data Human = Human deriving Show
+instance Component Human where type Storage Human = Map Human
+
+newtype HP = HP Int deriving (Show, Eq, Ord)
+instance Component HP where type Storage HP = Map HP
+
 newtype Sprite = Sprite Picture deriving Show
 instance Component Sprite where type Storage Sprite = Map Sprite
 
@@ -93,7 +99,8 @@ instance Component KeySet where type Storage KeySet = Global KeySet
 
 makeWorld "World"
   [ ''Camera
-  , ''Player, ''Boid, ''Obstacle
+  , ''Player, ''Boid, ''Human
+  , ''Obstacle
   , ''SpriteStore, ''Sprite
   , ''Position, ''Velocity, ''MaxSpeed, ''Angle
   , ''KeySet
@@ -149,6 +156,7 @@ areaHeight = 400
 -- xmin = -xmax
 boidMaxSpeed = 150
 playerMaxSpeed = 200
+humanMaxSpeed = 50
 sightRadius = 50
 followRadius = 300
 separationDist = 20
@@ -188,6 +196,18 @@ initPlayer pos = do
     , Angle 0
     , MaxSpeed playerMaxSpeed
     , Sprite playerSprite
+    )
+
+newHuman :: V2 Float -> V2 Float -> System' ()
+newHuman pos v = do
+  SpriteStore{ humanSprite } <- get global
+  newEntity_
+    ( Human
+    , Position pos
+    , Velocity v
+    , Angle 0
+    , MaxSpeed humanMaxSpeed
+    , Sprite humanSprite
     )
 
 -------------------------------------------
@@ -341,6 +361,7 @@ initialise = do
   set global ( Camera 0 1 )
   randomSpawnBoids 20
   initPlayer (V2 0 0)
+  newHuman (V2 0 50) (V2 0 -10)
 
 initSpriteStore :: System' ()
 initSpriteStore = liftIO loadSpriteStore >>= set global
