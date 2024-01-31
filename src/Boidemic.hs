@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# language StrictData #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecordWildCards #-}
 module Boidemic (boidemicMain) where
 
 import Apecs
@@ -31,23 +32,6 @@ import qualified Data.Set as S
 data Boid = Boid deriving Show
 instance Component Boid where type Storage Boid = Map Boid
 
-newtype BoidSprite = BoidSprite Picture deriving Show
-instance Semigroup BoidSprite where
-  BoidSprite Blank <> p2 = p2
-  p1 <> BoidSprite Blank = p1
-  p1 <> p2 = p1
-instance Monoid BoidSprite where mempty = BoidSprite Blank
-instance Component BoidSprite where type Storage BoidSprite = Global BoidSprite
-
-newtype PlayerSprite = PlayerSprite Picture deriving Show
-instance Semigroup PlayerSprite where
-  PlayerSprite Blank <> p2 = p2
-  p1 <> PlayerSprite Blank = p1
-  p1 <> p2 = p1
-instance Monoid PlayerSprite where mempty = PlayerSprite Blank
-instance Component PlayerSprite where type Storage PlayerSprite = Global PlayerSprite
-
-
 newtype Position = Position (V2 Float) deriving Show
 instance Component Position where type Storage Position = Map Position
 
@@ -65,6 +49,20 @@ instance Component Player where type Storage Player = Unique Player
 
 data Obstacle = Obstacle deriving Show
 instance Component Obstacle where type Storage Obstacle = Map Obstacle
+
+newtype Sprite = Sprite Picture deriving Show
+instance Component Sprite where type Storage Sprite = Map Sprite
+
+data SpriteStore = SpriteStore
+  { boidSprite   :: Picture
+  , playerSprite :: Picture
+  , humanSprite  :: Picture
+  } deriving (Show, Eq)
+
+instance Semigroup SpriteStore where
+  (<>) = error "only mempty needs to be used for SpriteStore"
+instance Monoid SpriteStore where mempty = SpriteStore Blank Blank Blank
+instance Component SpriteStore where type Storage SpriteStore = Global SpriteStore
 
 
 -- newtype Score = Score Int deriving (Show, Num)
@@ -96,7 +94,7 @@ instance Component KeySet where type Storage KeySet = Global KeySet
 makeWorld "World"
   [ ''Camera
   , ''Player, ''Boid, ''Obstacle
-  , ''BoidSprite, ''PlayerSprite
+  , ''SpriteStore, ''Sprite
   , ''Position, ''Velocity, ''MaxSpeed, ''Angle
   , ''KeySet
   ]
@@ -167,12 +165,30 @@ followFactor = 0.01
 -------------------------------------------
 
 newBoid :: V2 Float -> V2 Float -> System' ()
-newBoid pos v
-  = newEntity_ (Boid, Obstacle, Position pos, Velocity v, Angle 0, MaxSpeed boidMaxSpeed)
+newBoid pos v = do
+  SpriteStore{ boidSprite } <- get global
+  newEntity_
+    ( Boid
+    , Obstacle
+    , Position pos
+    , Velocity v
+    , Angle 0
+    , MaxSpeed boidMaxSpeed
+    , Sprite boidSprite
+    )
 
 initPlayer :: V2 Float -> System' ()
-initPlayer pos
-  = newEntity_ (Player, Obstacle, Position pos, Velocity 0, Angle 0, MaxSpeed playerMaxSpeed)
+initPlayer pos = do
+  SpriteStore{ playerSprite } <- get global
+  newEntity_
+    ( Player
+    , Obstacle
+    , Position pos
+    , Velocity 0
+    , Angle 0
+    , MaxSpeed playerMaxSpeed
+    , Sprite playerSprite
+    )
 
 -------------------------------------------
 -- Game Logic
@@ -280,8 +296,6 @@ actionToVelocity = \case
 
 cameraOnPlayer :: System' ()
 cameraOnPlayer
-  -- = cmapM_ $ \(Player, Position p) ->
-  --               modify global (\(Camera _ scale) -> Camera p scale)
   = cmap $ \(Player, Position p, Camera _ scale) -> Camera p scale
 
 followPlayer :: System' ()
@@ -292,7 +306,6 @@ followPlayer
         (\(Boid, Position p, Velocity v) ->
             let dv = followFactor *^ (t - p)
             in Velocity (v + dv))
-
 
 -------------------------------------------
 -- Rest
@@ -309,14 +322,9 @@ radToDegreeFactor = 180 / pi
 
 draw :: Picture -> System' Picture
 draw background = do
-  BoidSprite boidSprite <- get global
-  PlayerSprite playerSprite <- get global
-  boids <- foldDraw $ \(Boid, Position pos, Angle a) ->
-                translate' pos $ rotate' a boidSprite
-  player <- foldDraw $ \(Player, Position pos, Angle a) ->
-                translate' pos $ rotate' a playerSprite
-  
-  pure $ background <> boids <> player
+  sprites <- foldDraw $ \(Sprite sprite, Position pos, Angle a) ->
+               translate' pos $ rotate' a sprite
+  pure $ background <> sprites
 
 display :: Display
 display = InWindow "Boidemic" (1024, 1024) (10, 10)
@@ -329,21 +337,32 @@ randomSpawnBoids n = replicateM_ n $ do
 
 initialise :: System' ()
 initialise = do
+  initSpriteStore
   set global ( Camera 0 1 )
   randomSpawnBoids 20
   initPlayer (V2 0 0)
+
+initSpriteStore :: System' ()
+initSpriteStore = liftIO loadSpriteStore >>= set global
+
+loadSpriteStore :: IO SpriteStore
+loadSpriteStore = do
+  Just boidBMP   <- loadJuicyPNG "src/seagull.png"
+  Just playerBMP <- loadJuicyPNG "src/crow.png"
+  Just humanBMP  <- loadJuicyPNG "src/human1.png"
+  pure $ SpriteStore
+    { boidSprite   = rotate 90 $ scale 0.2 0.2 boidBMP
+    , playerSprite = rotate 90 $ scale 0.2 0.2 playerBMP
+    , humanSprite  = humanBMP
+    }
 
 
 boidemicMain :: IO ()
 boidemicMain = do
   w <- initWorld
-  Just boidSprite   <- loadJuicyPNG "src/seagull.png"
-  Just playerSprite <- loadJuicyPNG "src/crow.png"
   Just background   <- loadJuicyPNG "src/beach-background.png"
   setStdGen (mkStdGen 0)
   runWith w $ do
-    set global (BoidSprite $ rotate 90 $ scale 0.2 0.2 boidSprite) -- correct sprite angle
-    set global (PlayerSprite $ rotate 90 $ scale 0.2 0.2 playerSprite)
     initialise
     play display
          green
