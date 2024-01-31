@@ -28,6 +28,7 @@ import Data.Fixed (mod')
 import Apecs.System (cmapIf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.List (sortOn)
 
 data Boid = Boid deriving Show
 instance Component Boid where type Storage Boid = Map Boid
@@ -56,7 +57,8 @@ instance Component Human where type Storage Human = Map Human
 newtype HP = HP Int deriving (Show, Eq, Ord)
 instance Component HP where type Storage HP = Map HP
 
-newtype Sprite = Sprite Picture deriving Show
+-- Sprite with precedence level (lower = further towards back)
+data Sprite = Sprite Picture Int deriving Show
 instance Component Sprite where type Storage Sprite = Map Sprite
 
 data SpriteStore = SpriteStore
@@ -182,7 +184,7 @@ newBoid pos v = do
     , Velocity v
     , Angle 0
     , MaxSpeed boidMaxSpeed
-    , Sprite boidSprite
+    , Sprite boidSprite 10
     )
 
 initPlayer :: V2 Float -> System' ()
@@ -195,7 +197,7 @@ initPlayer pos = do
     , Velocity 0
     , Angle 0
     , MaxSpeed playerMaxSpeed
-    , Sprite playerSprite
+    , Sprite playerSprite 15
     )
 
 newHuman :: V2 Float -> V2 Float -> System' ()
@@ -207,7 +209,7 @@ newHuman pos v = do
     , Velocity v
     , Angle 0
     , MaxSpeed humanMaxSpeed
-    , Sprite humanSprite
+    , Sprite humanSprite 5
     )
 
 -------------------------------------------
@@ -342,8 +344,9 @@ radToDegreeFactor = 180 / pi
 
 draw :: Picture -> System' Picture
 draw background = do
-  sprites <- foldDraw $ \(Sprite sprite, Position pos, Angle a) ->
-               translate' pos $ rotate' a sprite
+  spritePrecs <- collect $ \(Sprite sprite precedence, Position pos, Angle a) ->
+               Just (precedence, translate' pos $ rotate' a sprite)
+  let sprites = sortOn fst spritePrecs |> map snd |> mconcat
   pure $ background <> sprites
 
 display :: Display
@@ -373,8 +376,8 @@ loadSpriteStore = do
   Just humanBMP  <- loadJuicyPNG "src/human1.png"
   pure $ SpriteStore
     { boidSprite   = rotate 90 $ scale 0.2 0.2 boidBMP
-    , playerSprite = rotate 90 $ scale 0.2 0.2 playerBMP
-    , humanSprite  = humanBMP
+    , playerSprite = rotate 90 $ scale 0.15 0.15 playerBMP
+    , humanSprite  = scale 1.3 1.3 humanBMP
     }
 
 
