@@ -57,6 +57,21 @@ instance Component Human where type Storage Human = Map Human
 newtype HP = HP Int deriving (Show, Eq, Ord)
 instance Component HP where type Storage HP = Map HP
 
+newtype HitRadius = HitRadius Float deriving (Show, Eq, Ord)
+instance Component HitRadius where type Storage HitRadius = Map HitRadius
+
+data Chip = Chip deriving Show
+instance Component Chip where type Storage Chip = Map Chip
+
+data BoidState
+  = Gliding
+  | Attacking Entity
+  deriving (Show, Eq)
+instance Component BoidState where type Storage BoidState = Map BoidState
+
+data HasChips = HasChips deriving Show
+instance Component HasChips where type Storage HasChips = Map HasChips
+
 -- Sprite with precedence level (lower = further towards back)
 data Sprite = Sprite Picture Int deriving Show
 instance Component Sprite where type Storage Sprite = Map Sprite
@@ -65,11 +80,13 @@ data SpriteStore = SpriteStore
   { boidSprite   :: Picture
   , playerSprite :: Picture
   , humanSprite  :: Picture
+  , chipSprite   :: Picture
+  , chipsSprite  :: Picture
   } deriving (Show, Eq)
 
 instance Semigroup SpriteStore where
   (<>) = error "only mempty needs to be used for SpriteStore"
-instance Monoid SpriteStore where mempty = SpriteStore Blank Blank Blank
+instance Monoid SpriteStore where mempty = SpriteStore Blank Blank Blank Blank Blank
 instance Component SpriteStore where type Storage SpriteStore = Global SpriteStore
 
 
@@ -101,10 +118,11 @@ instance Component KeySet where type Storage KeySet = Global KeySet
 
 makeWorld "World"
   [ ''Camera
-  , ''Player, ''Boid, ''Human
+  , ''Player, ''Boid, ''Human, ''Chip
   , ''Obstacle
   , ''SpriteStore, ''Sprite
   , ''Position, ''Velocity, ''MaxSpeed, ''Angle
+  , ''HitRadius, ''HP, ''BoidState, ''HasChips
   , ''KeySet
   ]
 
@@ -151,7 +169,7 @@ handleEvent _ = return ()
 
 -- type Kinetic = (Position, Velocity)
 -- , ymin, ymax :: Double
-areaWidth, areaHeight, boidMaxSpeed, playerMaxSpeed, separationDist, sightRadius, followRadius :: Float
+areaWidth, areaHeight, boidMaxSpeed, playerMaxSpeed, chipSpeed, chipDeceleration, separationDist, sightRadius, followRadius :: Float
 areaWidth = 400
 areaHeight = 400
 -- xmax = (areaWidth - playerW) / 2 - 5
@@ -159,6 +177,8 @@ areaHeight = 400
 boidMaxSpeed = 150
 playerMaxSpeed = 200
 humanMaxSpeed = 50
+chipSpeed = 500
+chipDeceleration = 0.03
 sightRadius = 50
 followRadius = 300
 separationDist = 20
@@ -174,17 +194,25 @@ followFactor = 0.01
 -- Spawning entities
 -------------------------------------------
 
+randomSpawnBoids :: Int -> System' ()
+randomSpawnBoids n = replicateM_ n $ do
+  pos <- liftIO $ randomRIO (-50, 50)
+  v   <- liftIO $ randomRIO (-30, 30)
+  newBoid pos v
+
 newBoid :: V2 Float -> V2 Float -> System' ()
 newBoid pos v = do
   SpriteStore{ boidSprite } <- get global
   newEntity_
-    ( Boid
+    ( (Boid, Gliding)
     , Obstacle
     , Position pos
     , Velocity v
     , Angle 0
     , MaxSpeed boidMaxSpeed
     , Sprite boidSprite 10
+    , HitRadius 15 
+    -- , Gliding -- Instance tuple size goes up to 8, have to make subtuples
     )
 
 initPlayer :: V2 Float -> System' ()
@@ -210,7 +238,36 @@ newHuman pos v = do
     , Angle 0
     , MaxSpeed humanMaxSpeed
     , Sprite humanSprite 5
+    , (HitRadius 20, HP 10, HasChips)
     )
+
+spawnChip :: V2 Float -> System' ()
+spawnChip pos = do
+  SpriteStore{ chipSprite } <- get global
+  direction <- liftIO $ randomRIO (0, 2 * pi)
+  newEntity_
+    ( Chip
+    , Position pos
+    , Velocity (chipSpeed *^ angle direction)
+    , Angle 0
+    , MaxSpeed humanMaxSpeed
+    , Sprite chipSprite 6
+    )
+
+spawnChips :: V2 Float -> System' ()
+spawnChips pos = do
+  SpriteStore{ chipsSprite } <- get global
+  logDebug "Spawn chips"
+  -- direction <- liftIO $ randomRIO (0, 2 * pi)
+  -- newEntity_
+  --   ( Chip
+  --   , Position pos
+  --   , Velocity (chipSpeed *^ angle direction)
+  --   , Angle 0
+  --   , MaxSpeed humanMaxSpeed
+  --   , Sprite chipSprite 6
+  --   )
+
 
 -------------------------------------------
 -- Game Logic
@@ -248,6 +305,9 @@ gameLogic = do
   playerVelocity
   speedLimit
   syncAngle
+  decelerateChips
+  collision
+  dropChips
 
 cohesion :: System' ()
 cohesion = cmapM $ \(Boid, Position p, Velocity v) -> do
@@ -329,6 +389,34 @@ followPlayer
             let dv = followFactor *^ (t - p)
             in Velocity (v + dv))
 
+collision :: System' ()
+collision =
+  cmapM_ $ \(Boid, Position posB, HitRadius rB, boidState :: BoidState, etyB :: Entity) ->
+    cmapM_ $ \(Human, Position posH, HitRadius rH, HP hp, HasChips, etyH :: Entity) -> do
+      case (withinRange (rH + rB) posH posB, boidState) of
+        (True, Gliding) -> do
+          set etyB (Attacking etyH)
+          set etyH (HP $ max 0 (hp - 1))
+          logDebug ("New HP: " ++ show (max 0 (hp - 1)))
+          spawnChip posH
+        (False, Attacking etyH') -> when (etyH == etyH') $ set etyB Gliding
+        _ -> pure ()
+
+decelerateChips :: System' ()
+decelerateChips
+  = cmap $ \(Chip, Velocity v) -> Velocity ((1 - chipDeceleration) *^ v)
+
+dropChips :: System' ()
+dropChips
+  = cmapM $ \(Human, HasChips, HP hp, Position p) -> 
+      if (hp <= 0)
+        then do 
+          spawnChips p
+          pure $ Right (Not @HasChips)
+        else pure $ Left ()
+
+
+
 -------------------------------------------
 -- Rest
 -------------------------------------------
@@ -345,18 +433,16 @@ radToDegreeFactor = 180 / pi
 draw :: Picture -> System' Picture
 draw background = do
   spritePrecs <- collect $ \(Sprite sprite precedence, Position pos, Angle a) ->
-               Just (precedence, translate' pos $ rotate' a sprite)
+                    Just (precedence, translate' pos $ rotate' a sprite)
   let sprites = sortOn fst spritePrecs |> map snd |> mconcat
-  pure $ background <> sprites
+
+  hitcircles <- foldDraw $ \(HitRadius r, Position p) ->
+                              translate' p $ color orange $ circle r
+
+  pure $ background <> sprites <> hitcircles
 
 display :: Display
 display = InWindow "Boidemic" (1024, 1024) (10, 10)
-
-randomSpawnBoids :: Int -> System' ()
-randomSpawnBoids n = replicateM_ n $ do
-  pos <- liftIO $ randomRIO (-50, 50)
-  v   <- liftIO $ randomRIO (-30, 30)
-  newBoid pos v
 
 initialise :: System' ()
 initialise = do
@@ -374,17 +460,22 @@ loadSpriteStore = do
   Just boidBMP   <- loadJuicyPNG "src/seagull.png"
   Just playerBMP <- loadJuicyPNG "src/crow.png"
   Just humanBMP  <- loadJuicyPNG "src/human1.png"
+  Just chipBMP   <- loadJuicyPNG "src/chip.png"
+  Just chipsBMP  <- loadJuicyPNG "src/chips.png"
+
   pure $ SpriteStore
     { boidSprite   = rotate 90 $ scale 0.2 0.2 boidBMP
     , playerSprite = rotate 90 $ scale 0.15 0.15 playerBMP
     , humanSprite  = scale 1.3 1.3 humanBMP
+    , chipSprite   = scale 0.4 0.4 chipBMP
+    , chipsSprite  = chipsBMP
     }
 
 
 boidemicMain :: IO ()
 boidemicMain = do
   w <- initWorld
-  Just background   <- loadJuicyPNG "src/beach-background.png"
+  Just background <- loadJuicyPNG "src/beach-background.png"
   setStdGen (mkStdGen 0)
   runWith w $ do
     initialise
@@ -400,8 +491,8 @@ boidemicMain = do
 -------------------------------------------
 
 logDebug :: String -> System' ()
--- logDebug = liftIO . putStrLn
-logDebug _ = pure ()
+logDebug = liftIO . putStrLn
+-- logDebug _ = pure ()
 
 toRadians :: Floating a => a -> a
 toRadians x = x * (pi / 180)
