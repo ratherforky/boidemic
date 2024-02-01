@@ -63,14 +63,18 @@ instance Component HitRadius where type Storage HitRadius = Map HitRadius
 data Chip = Chip deriving Show
 instance Component Chip where type Storage Chip = Map Chip
 
+data Chips = Chips deriving Show
+instance Component Chips where type Storage Chips = Map Chips
+
+data HasChips = HasChips deriving Show
+instance Component HasChips where type Storage HasChips = Map HasChips
+
 data BoidState
   = Gliding
   | Attacking Entity
   deriving (Show, Eq)
 instance Component BoidState where type Storage BoidState = Map BoidState
 
-data HasChips = HasChips deriving Show
-instance Component HasChips where type Storage HasChips = Map HasChips
 
 -- Sprite with precedence level (lower = further towards back)
 data Sprite = Sprite Picture Int deriving Show
@@ -88,6 +92,9 @@ instance Semigroup SpriteStore where
   (<>) = error "only mempty needs to be used for SpriteStore"
 instance Monoid SpriteStore where mempty = SpriteStore Blank Blank Blank Blank Blank
 instance Component SpriteStore where type Storage SpriteStore = Global SpriteStore
+
+data SyncAngle = SyncAngle deriving Show
+instance Component SyncAngle where type Storage SyncAngle = Map SyncAngle
 
 
 -- newtype Score = Score Int deriving (Show, Num)
@@ -118,10 +125,10 @@ instance Component KeySet where type Storage KeySet = Global KeySet
 
 makeWorld "World"
   [ ''Camera
-  , ''Player, ''Boid, ''Human, ''Chip
+  , ''Player, ''Boid, ''Human, ''Chip, ''Chips
   , ''Obstacle
   , ''SpriteStore, ''Sprite
-  , ''Position, ''Velocity, ''MaxSpeed, ''Angle
+  , ''Position, ''Velocity, ''MaxSpeed, ''Angle, ''SyncAngle
   , ''HitRadius, ''HP, ''BoidState, ''HasChips
   , ''KeySet
   ]
@@ -208,7 +215,7 @@ newBoid pos v = do
     , Obstacle
     , Position pos
     , Velocity v
-    , Angle 0
+    , (Angle 0, SyncAngle)
     , MaxSpeed boidMaxSpeed
     , Sprite boidSprite 10
     , HitRadius 15 
@@ -223,7 +230,7 @@ initPlayer pos = do
     , Obstacle
     , Position pos
     , Velocity 0
-    , Angle 0
+    , (Angle 0, SyncAngle)
     , MaxSpeed playerMaxSpeed
     , Sprite playerSprite 15
     )
@@ -235,7 +242,7 @@ newHuman pos v = do
     ( Human
     , Position pos
     , Velocity v
-    , Angle 0
+    , (Angle 0, SyncAngle)
     , MaxSpeed humanMaxSpeed
     , Sprite humanSprite 5
     , (HitRadius 20, HP 10, HasChips)
@@ -249,8 +256,8 @@ spawnChip pos = do
     ( Chip
     , Position pos
     , Velocity (chipSpeed *^ angle direction)
-    , Angle 0
-    , MaxSpeed humanMaxSpeed
+    , (Angle 0, SyncAngle)
+    , MaxSpeed chipSpeed
     , Sprite chipSprite 6
     )
 
@@ -258,15 +265,16 @@ spawnChips :: V2 Float -> System' ()
 spawnChips pos = do
   SpriteStore{ chipsSprite } <- get global
   logDebug "Spawn chips"
-  -- direction <- liftIO $ randomRIO (0, 2 * pi)
-  -- newEntity_
-  --   ( Chip
-  --   , Position pos
-  --   , Velocity (chipSpeed *^ angle direction)
-  --   , Angle 0
-  --   , MaxSpeed humanMaxSpeed
-  --   , Sprite chipSprite 6
-  --   )
+  direction <- liftIO $ randomRIO (0, 2 * pi)
+  newEntity_
+    ( Chips
+    , Chip -- Just doing this for the deceleration, might cause problems
+    , Position pos
+    , Velocity (chipSpeed *^ angle direction)
+    , Angle 0
+    , MaxSpeed chipSpeed
+    , Sprite chipsSprite 7
+    )
 
 
 -------------------------------------------
@@ -352,7 +360,7 @@ speedLimit
 syncAngle :: System' ()
 syncAngle
   = cmapIf (\(Velocity v) -> v /= 0) -- Prevent div by 0
-           (\(Angle _, Velocity v) -> Angle (unangle v))
+           (\(SyncAngle, Angle _, Velocity v) -> Angle (unangle v))
 
 playerVelocity :: System' ()
 playerVelocity = do
@@ -403,8 +411,11 @@ collision =
         _ -> pure ()
 
 decelerateChips :: System' ()
-decelerateChips
-  = cmap $ \(Chip, Velocity v) -> Velocity ((1 - chipDeceleration) *^ v)
+decelerateChips = do
+  cmap $ \(Chip, Velocity v) ->
+            if norm v <= 0.1
+              then Velocity 0
+              else Velocity ((1 - chipDeceleration) *^ v)
 
 dropChips :: System' ()
 dropChips
@@ -412,8 +423,8 @@ dropChips
       if (hp <= 0)
         then do 
           spawnChips p
-          pure $ Right (Not @HasChips)
-        else pure $ Left ()
+          pure $ Right (Not @HasChips) -- Removes the `HasChips` component from the entity
+        else pure $ Left () -- NOOP
 
 
 
@@ -468,7 +479,7 @@ loadSpriteStore = do
     , playerSprite = rotate 90 $ scale 0.15 0.15 playerBMP
     , humanSprite  = scale 1.3 1.3 humanBMP
     , chipSprite   = scale 0.4 0.4 chipBMP
-    , chipsSprite  = chipsBMP
+    , chipsSprite  = scale 0.4 0.4 chipsBMP
     }
 
 
