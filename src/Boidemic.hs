@@ -75,7 +75,6 @@ data BoidState
   deriving (Show, Eq)
 instance Component BoidState where type Storage BoidState = Map BoidState
 
-
 -- Sprite with precedence level (lower = further towards back)
 data Sprite = Sprite Picture Int deriving Show
 instance Component Sprite where type Storage Sprite = Map Sprite
@@ -96,27 +95,6 @@ instance Component SpriteStore where type Storage SpriteStore = Global SpriteSto
 data SyncAngle = SyncAngle deriving Show
 instance Component SyncAngle where type Storage SyncAngle = Map SyncAngle
 
-
--- newtype Score = Score Int deriving (Show, Num)
--- instance Semigroup Score where (<>) = (+)
--- instance Monoid Score where mempty = 0
--- instance Component Score where type Storage Score = Global Score
-
--- newtype Time = Time Float deriving (Show, Num)
--- instance Semigroup Time where (<>) = (+)
--- instance Monoid Time where mempty = 0
--- instance Component Time where type Storage Time = Global Time
-
--- newtype LeftDown = LeftDown Bool deriving Show
--- instance Component LeftDown where type Storage LeftDown = Global LeftDown
--- instance Semigroup LeftDown where LeftDown p <> LeftDown q = LeftDown (p && q)
--- instance Monoid LeftDown where mempty = LeftDown False
-
--- newtype RightDown = RightDown Bool deriving Show
--- instance Component RightDown where type Storage RightDown = Global RightDown
--- instance Semigroup RightDown where RightDown p <> RightDown q = RightDown (p && q)
--- instance Monoid RightDown where mempty = RightDown False
-
 newtype KeySet = KeySet { unKeySet :: S.Set Key } deriving Show
 instance Semigroup KeySet where
   ksX <> ksY = KeySet (unKeySet ksX `S.union` unKeySet ksY)
@@ -134,8 +112,6 @@ makeWorld "World"
   ]
 
 type System' a = System World a
-type Kinetic = (Position, Velocity, MaxSpeed, Angle)
-
 
 -------------------------------------------
 -- User input
@@ -174,26 +150,23 @@ handleEvent _ = return ()
 -------------------------------------------
 
 
--- type Kinetic = (Position, Velocity)
--- , ymin, ymax :: Double
+
 areaWidth, areaHeight, boidMaxSpeed, playerMaxSpeed, chipSpeed, chipDeceleration, separationDist, sightRadius, followRadius :: Float
 areaWidth = 400
 areaHeight = 400
--- xmax = (areaWidth - playerW) / 2 - 5
--- xmin = -xmax
 boidMaxSpeed = 150
 playerMaxSpeed = 200
 humanMaxSpeed = 50
 chipSpeed = 500
 chipDeceleration = 0.03
-sightRadius = 50
+sightRadius = 100 -- 50
 followRadius = 300
-separationDist = 20
+separationDist = 30 -- 20
 
 cohesionFactor, separationFactor, alignmentFactor, followFactor :: Float
 cohesionFactor = 0.01
-separationFactor = 0.5
-alignmentFactor = 0.05
+separationFactor = 0.1
+alignmentFactor = 0.01
 followFactor = 0.01
 
 
@@ -286,19 +259,8 @@ spawnChips pos = do
 step :: Float -> System' ()
 step dT = do
   gameLogic
-  -- incrTime dT
   stepPosition dT
   cameraOnPlayer
-  -- setPlayerVelocity
-  -- clampPlayer
-  -- stepParticles dT
-  -- stepPhysics (1/60)
-  -- stepPosition dT
-  -- clampPlayer
-  -- clearBlocks
-  -- clearBullets
-  -- stepParticles dT
-  -- handleCollisions
 
 stepPosition :: Float -> System' ()
 stepPosition dT
@@ -318,39 +280,33 @@ gameLogic = do
   dropChips
 
 cohesion :: System' ()
-cohesion = cmapM $ \(Boid, Position p, Velocity v) -> do
-  localPs <- collect $ \(Boid, Position p') -> toMaybe (withinRange sightRadius p p') p'
-  -- let centreMass = sumV localPs ^/ (fromIntegral $ length localPs)
-  let v' = case localPs of
-            []  -> v
-            [_] -> v -- Only local boid is the one we want to update
-            _   -> 
-              let centreMass = (sumV localPs - p)
-                            ^/ (fromIntegral $ length localPs - 1)
-                  dv = cohesionFactor *^ (centreMass - p)
-              in  v + dv
-  pure $ Velocity v'
+cohesion = cmapM $ \(Boid, Position p, Velocity v, etyX :: Entity) -> do
+  localPs <- collect $ \(Boid, Position p', etyY :: Entity)
+                        -> p' `justIf` (withinRange sightRadius p p'
+                                        && etyX /= etyY)
+  let dv = case localPs of
+            []  -> 0
+            _   -> cohesionFactor *^ (mean localPs - p)
+  pure $ Velocity (v + dv)
 
 separation :: System' ()
 separation = cmapM $ \(Boid, Position p, Velocity v) -> do
-  localDists <- collect $ \(Obstacle, Position p')
-                            -> toMaybe (withinRange separationDist p p')
-                                       (p' - p)
-  pure $ Velocity (v - separationFactor *^ sumV localDists)
+  localDistVecs
+    <- collect
+         (\(Obstacle, Position p')
+           -> (p - p') `justIf` (withinRange separationDist p p'))
+  let dv = separationFactor *^ sumV localDistVecs
+  pure $ Velocity (v + dv)
 
 alignment :: System' ()
-alignment = cmapM $ \(Boid, Position p, Velocity v) -> do
-  localVs <- collect $ \(Boid, Position p', Velocity v')
-                        -> toMaybe (withinRange separationDist p p') v'
-
-  let v' = case localVs of
-            []  -> v
-            [_] -> v -- Only local boid is the one we want to update
-            _   -> 
-              let meanV = (sumV localVs - v) ^/ (fromIntegral $ length localVs - 1)
-                  dv = alignmentFactor *^ meanV
-              in  v + dv
-  pure $ Velocity v'
+alignment = cmapM $ \(Boid, Position p, Velocity v, etyX :: Entity) -> do
+  localVs <- collect $ \(Boid, Position p', Velocity v', etyY :: Entity)
+                        -> v' `justIf` (withinRange sightRadius p p'
+                                        && etyX /= etyY)
+  let dv = case localVs of
+            []  -> 0
+            _   -> alignmentFactor *^ (mean localVs - v)
+  pure $ Velocity (v + dv)
 
 speedLimit :: System' ()
 speedLimit
@@ -461,7 +417,7 @@ initialise = do
   set global ( Camera 0 1 )
   randomSpawnBoids 20
   initPlayer (V2 0 0)
-  newHuman (V2 0 50) (V2 0 -10)
+  newHuman (V2 0 -200) (V2 0 -10)
 
 initSpriteStore :: System' ()
 initSpriteStore = liftIO loadSpriteStore >>= set global
@@ -514,5 +470,14 @@ clamp minVal maxVal x = min maxVal (max minVal x)
 toMaybe :: Bool -> a -> Maybe a
 toMaybe q x = if q then Just x else Nothing
 
+justIf :: a -> Bool -> Maybe a
+justIf x q = if q then Just x else Nothing
+
+
 withinRange :: Float -> V2 Float -> V2 Float -> Bool
 withinRange radius p1 p2 = distance p1 p2 <= radius
+
+mean :: Fractional a => [V2 a] -> V2 a
+mean [] = error "Empty list passed to `mean`"
+mean vs = (sumV vs)
+       ^/ (fromIntegral $ length vs)
