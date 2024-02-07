@@ -270,7 +270,7 @@ gameLogic :: System' ()
 gameLogic = do
   cohesion
   separation
-  alignment -- boids zoom off without a speed limit
+  alignment
   followPlayer
   playerVelocity
   speedLimit
