@@ -1,3 +1,7 @@
+## Running the game
+- Install GHC and cabal: https://www.haskell.org/ghcup/install/
+- Run `cabal run` in the project root
+
 ## Controls
 
 - Arrow keys to move
