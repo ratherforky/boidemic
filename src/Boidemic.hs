@@ -29,6 +29,7 @@ import Apecs.System (cmapIf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.List (sortOn)
+import Control.Monad.IO.Class (MonadIO)
 
 data Boid = Boid deriving Show
 instance Component Boid where type Storage Boid = Map Boid
@@ -446,6 +447,7 @@ boidemicMain = do
   setStdGen (mkStdGen 0)
   runWith w $ do
     initialise
+    -- cdebug (\(Boid, Velocity v) -> v)
     play display
          green
          60
@@ -460,6 +462,14 @@ boidemicMain = do
 logDebug :: String -> System' ()
 logDebug = liftIO . putStrLn
 -- logDebug _ = pure ()
+
+-- requires: `import Control.Monad.IO.Class (MonadIO)`
+cdebug :: (Show a, Get w m c, Members w m c, MonadIO m)
+       => (c -> a) -> SystemT w m ()
+cdebug f = cmapM_ (\x -> liftIO (print (f x)))
+
+-- e.g. print the cards and entity ID for each entity with those components:
+--   `cdebug (\(Deck cards, eID :: Entity) -> (cards, eID))`
 
 toRadians :: Floating a => a -> a
 toRadians x = x * (pi / 180)
