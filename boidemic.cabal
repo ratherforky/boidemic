@@ -19,7 +19,7 @@ maintainer:         jess.foster@bristol.ac.uk
 -- A copyright notice.
 -- copyright:
 -- category:
-extra-source-files: CHANGELOG.md
+extra-source-files: LICENSE
 
 library
     exposed-modules:
